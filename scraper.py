@@ -1,7 +1,7 @@
 """scraper.py — CDT scraping library.
 
-Pure functions for fetching CDT character IDs, metadata, and images.
-No top-level side effects. Imported by build_corpus.py and the probe
+for fetching CDT character IDs, metadata, and images.
+Imported by build_corpus.py and the probe
 scripts.
 
 Public API:
