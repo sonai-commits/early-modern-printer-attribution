@@ -74,14 +74,10 @@ and around 3,800 character images from CDT, focused on English print
 between roughly 1645 and 1704. Books outside this period or geography
 are not supported without rebuilding the corpus.
 
-**This is not a production deployment.** The system is intended to
-support bibliographic research and to demonstrate an integrated
-agentic-RAG architecture. It has not been optimized for high traffic
-or hardened against adversarial input.
 
 ## How it works
 
-### The pipeline, in five layers
+### The pipeline:
 
 **Layer 1: Image preprocessing.** Each character image is normalized,
 background-removed, and rendered as a damage residual against a clean
@@ -150,7 +146,7 @@ The module supports four masking modes for principled evaluation:
 - **Strict-clandestine**: also masks the printer's known bookseller
   partners. Closer to a real anonymous attribution case.
 - **Strictest-clandestine**: additionally suppresses the year. Only
-  visual evidence carries signal. The worst case.
+  visual evidence carries information (The worst case).
 
 ## Evaluation results
 
@@ -183,8 +179,8 @@ other "A"s). The current corpus produces 165 clusters with about 28%
 noise. Each cluster has a printer-distribution profile telling you
 which shops contributed to it.
 
-**3. The LanceDB vector database.** A persistent on-disk vector store
-holding three tables:
+**3. The LanceDB vector database.** Our on-disk vector store
+holds three tables:
 
 | Table | Rows | Vector field | Other fields |
 |---|---|---|---|
@@ -202,13 +198,12 @@ retrieve relevant context.
 
 LanceDB was chosen because it is embeddable (no separate server
 process), supports hybrid vector+keyword search, and writes to disk
-as a single directory that can be deleted and rebuilt cheaply.
+as a single directory that can be deleted and rebuilt.
 
 ### The agent loop
 
 The language model is Qwen 2.5:14B running locally via Ollama. The
-agent operates in a tool-calling loop, not a free-form generation
-loop. Here is what happens when a user submits a question.
+agent works on the info from the existing tools. Here is what happens when a user submits a question.
 
 **Step 0: Conversation state.** The agent has a `messages` list in the
 format used by chat-completion APIs:
@@ -304,13 +299,11 @@ What happens:
    audit, listing the similar printers, and noting the
    low-to-moderate confidence with the leakage flag explained.
 6. Verifier checks: the answer mentions Roberts, Everingham, Hayes,
-   Tyler, cluster A::0006 — all of these appear in tool results.
+   Tyler, cluster A::0006 -- all of these appear in tool results.
    The answer mentions `compare_printer_fingerprints` and
-   `audit_cluster` — both were actually called. Pass.
+   `audit_cluster` -- both were actually called. Pass.
 7. Answer returned to user, trace saved.
 
-Typical investigation: 3 to 7 tool calls, 30 to 90 seconds total
-wall-clock time on a recent GPU.
 
 ### Design Choice
 
