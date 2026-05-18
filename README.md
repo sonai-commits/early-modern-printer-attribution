@@ -214,7 +214,7 @@ likewise regenerable.
 
 - Python 3.11 or newer
 - A CUDA-capable GPU with at least 16 GB of memory (for Qwen 14B
-  inference; smaller language models can be substituted with edits)
+  inference or any other smaller language models can be substituted with edits)
 - Around 10 GB of disk space for the corpus, encoder weights, and
   Ollama model
 
@@ -239,8 +239,7 @@ Ensure the Ollama service is running. The agent connects to
 ### Step 3: Build the corpus
 
 This downloads character images and metadata from the CDT API. The
-full build covers 59 printers in three stages and takes roughly 45
-minutes at the default polite rate limit.
+full build covers 59 printers.
 
 ```bash
 python build_corpus.py --stage all
@@ -263,8 +262,7 @@ stopped. Add `--rate-limit 1.0` to be more conservative with API calls.
 python real_rag.py --encoder contrastive --retrain
 ```
 
-100 epochs of contrastive metric learning. Takes 5 to 10 minutes on a
-recent GPU.
+100 epochs (deafult) of contrastive metric learning.
 
 ## Usage
 
@@ -336,7 +334,7 @@ Once the web interface or chat REPL is running, try:
 - *Audit cluster A::0006 and tell me whether it represents genuine
   shared damage or single-printer variation.*
 
-For the cold-start guardrail:
+For the cold-start scenario:
 
 - *Who printed ESTC R28199?* — this is a book whose printer has only
   one example in the corpus. The system should warn and decline to
@@ -400,17 +398,6 @@ catalog metadata are CDT's, accessed through their open API. The
 encoder, fingerprint pipeline, agent design, evaluation diagnostics,
 and chat interface are this project's contribution.
 
-## Citation
-
-```bibtex
-@misc{cdt-printer-attribution,
-  author = {Debanjan},
-  title  = {cdt-printer-attribution: An agentic system for damaged-type
-            printer attribution on the CMU Catalog of Distinctive Type},
-  year   = {2026},
-  url    = {https://github.com/<your-username>/cdt-printer-attribution}
-}
-```
 
 ## License
 
