@@ -7,6 +7,9 @@ Built around a natural-language agent that can use thirteen specialized
 analysis tools, weigh bibliographic evidence against visual evidence,
 and explain its reasoning step by step.
 
+A live demontration of the framework is hosted here : https://herbs-snugly-purely.ngrok-free.dev/
+
+
 ---
 
 ## The problem
