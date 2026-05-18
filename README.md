@@ -16,8 +16,8 @@ A live demontration of the framework is hosted here : https://herbs-snugly-purel
 
 Many books printed in seventeenth-century England carry false or missing
 information on their title pages. Printers who handled politically risky
-material—unlicensed pamphlets, dissenting religious texts, satirical
-attacks on the crown—often left their names off, used a fake imprint,
+materials, unlicensed pamphlets, dissenting religious texts, satirical
+attacks on the crown, often left their names off, used a fake imprint,
 or hid behind a bookseller. Identifying the real printer of an anonymous
 book is a classic problem in bibliography.
 
@@ -40,8 +40,8 @@ Given an Early Modern book in the CDT corpus:
 1. It extracts visual signatures from the damaged characters in the book.
 2. It compares those signatures against per-printer fingerprints built
    from the rest of the corpus.
-3. It combines this visual evidence with other clues—the date, the
-   stated publisher, known bookseller partnerships—using probabilistic
+3. It combines this visual evidence with other clues, the date, the
+   stated publisher, known bookseller partnerships using probabilistic
    reasoning.
 4. It can adaptively decide which clues to gather first, stopping early
    when an answer becomes clear.
@@ -101,8 +101,8 @@ over the cluster space, capturing which damage patterns appear in their
 books and how distinctively.
 
 **Layer 5: Multi-evidence aggregation.** Visual evidence is combined
-with three other streams—imprint regex matching, temporal range
-overlap, and bookseller partnership likelihood—via Bayesian
+with three other functionalities, imprint regex matching, temporal range
+overlap, and bookseller partnership likelihood via Bayesian
 likelihood-ratio aggregation into a single posterior probability over
 candidate printers.
 
@@ -131,7 +131,7 @@ The agent decides which tools to call, in what order, with what
 arguments. A two-stage verifier reviews the agent's final answer and
 catches fabricated references or unsupported claims. Confidence levels
 are computed deterministically in Python and supplied to the agent as
-non-negotiable inputs—the agent cannot inflate its own confidence.
+inputs so that the agent cannot inflate its own confidence.
 
 ### The active acquisition module
 
@@ -158,11 +158,220 @@ Numbers are recall@3 on 202 books across 59 printers, with chance
 performance at 5.5%. The encoder is the contrastive CNN trained for
 100 epochs on the full corpus.
 
+## Architecture: how a question becomes an answer
+
+This section walks through what actually happens between the moment a
+user types a question and the moment they see a final answer. It
+covers the data layer (vector database, embeddings, manifest), the
+language-model agent loop, the tool-calling protocol, and the
+verification step.
+
+### Component overview
+
+Three things sit in memory once the system finishes loading:
+
+**1. The glyph index.** Around 3,800 character images, each with a
+metadata record (printer, year, book identifier, character class,
+file path) and a 128-dimensional embedding vector produced by the
+contrastive encoder. This lives in Python as a list of records plus
+a NumPy array of vectors.
+
+**2. The cluster space.** Glyphs are grouped into clusters of likely
+same-piece matches using HDBSCAN over the embedding vectors,
+restricted to within-character matches (an "A" can only cluster with
+other "A"s). The current corpus produces 165 clusters with about 28%
+noise. Each cluster has a printer-distribution profile telling you
+which shops contributed to it.
+
+**3. The LanceDB vector database.** A persistent on-disk vector store
+holding three tables:
+
+| Table | Rows | Vector field | Other fields |
+|---|---|---|---|
+| `glyphs` | 3,816 | 128-d contrastive embedding | glyph_id, printer_slug, char, year, estc, cluster_id, image_path |
+| `books` | 203 | 384-d text embedding (MiniLM) | estc, title, year, printer_slug, publisher, search_text |
+| `literature` | 11 | 384-d text embedding | source, year, text |
+
+The `glyphs` table powers k-nearest-neighbor search over visual
+embeddings. The `books` table supports both vector search and
+full-text search over publisher and title fields. The `literature`
+table indexes excerpts from bibliographic reference works
+(Plomer's dictionary, Warren et al.'s case studies, McKenzie's
+*Bibliography and the Sociology of Texts*, etc.) so the agent can
+retrieve relevant context.
+
+LanceDB was chosen because it is embeddable (no separate server
+process), supports hybrid vector+keyword search, and writes to disk
+as a single directory that can be deleted and rebuilt cheaply.
+
+### The agent loop
+
+The language model is Qwen 2.5:14B running locally via Ollama. The
+agent operates in a tool-calling loop, not a free-form generation
+loop. Here is what happens when a user submits a question.
+
+**Step 0: Conversation state.** The agent has a `messages` list in the
+format used by chat-completion APIs:
+
+```
+[
+  {"role": "system",    "content": <system prompt>},
+  {"role": "user",      "content": <user's question>},
+  {"role": "assistant", "content": <previous answer>},
+  {"role": "tool",      "content": <previous tool result>},
+  ...
+]
+```
+
+If this is a fresh investigation, the list starts with just the system
+prompt and the user's question. If it is a follow-up in an ongoing
+conversation, the list continues from where the previous turn ended.
+
+The system prompt is around 2,000 tokens and tells the agent: what
+tools are available, what each tool's arguments mean, how to interpret
+confidence bands and leakage warnings, when to refuse (cold-start
+cases), and what counts as a fabricated reference.
+
+**Step 1: First model call.** The agent sends `messages` plus the
+schemas for all 13 tools to the Ollama endpoint. The model decides
+whether to call a tool or produce a final answer. If it wants to call
+a tool, the response contains a `tool_calls` field with the tool's
+name and JSON arguments.
+
+**Step 2: Tool execution.** If a tool was requested, the agent
+dispatches it to the appropriate Python function. Tools have signatures
+like `attribute_book(estc_id="R175810", top_k=3)` and return JSON-
+serializable dicts. The result is appended to `messages` as a `tool`
+role message and saved to the trace.
+
+**Step 3: Loop.** Control returns to step 1. The agent sees the new
+tool result and decides what to do next — call another tool, or
+produce a final answer. The loop continues up to `max_steps` (default
+20) iterations.
+
+**Step 4: Verification.** When the agent produces a final answer (no
+tool call, just content), two checks run before the answer is
+returned to the user.
+
+The first check looks for **fabricated tool claims**: phrases like
+"the literature search reveals..." or "find_books_by_printer returned..."
+when no such tool call appears in the trace. The second check looks
+for **fabricated entity references**: ESTC IDs, cluster IDs, printer
+slugs, or glyph IDs that appear in the answer but in no tool result.
+
+Both checks are simple substring matching against the actual trace
+plus a regex-based extraction of tool-shaped phrasing. If either check
+fires, the agent receives a corrective user message asking it to
+either call the missing tool or remove the unsupported claim, and the
+loop continues. Up to two retries are allowed; after that, the answer
+is accepted with the verifier's flags attached to the trace.
+
+**Step 5: Persistence.** The full trace is written to disk as a
+JSON file in `sort_rag_run/traces/`. The trace contains the user
+question, every tool call with its arguments and result, the final
+answer, the verifier's flags, the elapsed time, and the conversation
+state at the end of the turn.
+
+The returned record includes `messages_after`, which is the
+conversation state needed for the next turn. The interactive REPL
+and the Gradio interface both keep this state across turns so the
+agent has memory of what was just established.
+
+### A worked example
+
+Question: *"Who printed ESTC R175810? Cross-check against
+typographically similar printers."*
+
+What happens:
+
+1. Agent reads the question, decides this needs an attribution call.
+2. Calls `attribute_book(estc_id="R175810", top_k=3)`. Tool returns
+   a ranking (Roberts at top), a confidence band ("low-to-moderate"),
+   a leakage_suspect flag (true, because the gap to second is small),
+   and a cold_start_warning (false, because Roberts has 6 books in
+   the corpus).
+3. The agent reads "low-to-moderate confidence" and "leakage_suspect
+   true" and decides to verify by calling `audit_cluster` on the
+   top contributing cluster ID. Tool returns the cluster's
+   printer-distribution, confirming the cluster is genuinely
+   shared across multiple printers (good evidence).
+4. To answer the user's "cross-check against similar printers"
+   sub-question, the agent calls
+   `compare_printer_fingerprints(printer_slug="roberts_robert", top_k=3)`.
+   Tool returns Everingham, Hayes, and Tyler as Roberts's nearest
+   neighbors in fingerprint space.
+5. Agent produces a final answer naming Roberts, citing the cluster
+   audit, listing the similar printers, and noting the
+   low-to-moderate confidence with the leakage flag explained.
+6. Verifier checks: the answer mentions Roberts, Everingham, Hayes,
+   Tyler, cluster A::0006 — all of these appear in tool results.
+   The answer mentions `compare_printer_fingerprints` and
+   `audit_cluster` — both were actually called. Pass.
+7. Answer returned to user, trace saved.
+
+Typical investigation: 3 to 7 tool calls, 30 to 90 seconds total
+wall-clock time on a recent GPU.
+
+### Design Choice
+
+A deliberate design choice: the agent is responsible for *which*
+analysis to run, but not for *evaluating* the result. Specifically:
+
+**Confidence bands are computed in Python and supplied as facts.**
+The Python attribution code computes whether the cosine gap between
+the top and second printer exceeds a threshold and assigns one of
+five bands (`high`, `moderate`, `low-to-moderate`, `low`,
+`cold_start`). The agent reads this from the tool output and is
+instructed to use it verbatim. It cannot say "high confidence" if
+the tool said "low."
+
+**Leakage warnings are non-negotiable.** When the top cosine exceeds
+0.90, the tool returns `leakage_suspect: true` with a description
+of why. The agent has to surface this in its answer.
+
+**Cold-start detection is automatic.** Before returning a ranking,
+the attribution tool checks whether the catalogued printer has only
+one book in the corpus. If so, the response includes
+`cold_start_warning: true` and a sentence explaining that the
+ranking is structurally unreliable. The agent reports this rather
+than overriding it.
+
+This separation matters because language models are good at picking
+which tool to run, less good at calibrating their own confidence. By
+moving the calibration decisions out of the model and into
+deterministic code, the system can claim a confidence level the user
+can rely on, regardless of how the language model is feeling that day.
+
+### Why an agent instead of a fixed pipeline
+
+A fixed pipeline would call all tools in a predetermined order for
+every question and produce a templated answer. The agent design has
+two advantages.
+
+First, **adaptive querying.** Some questions only need one tool call
+("who printed ESTC R175810?" → `attribute_book` → done). Others need
+several follow-ups ("compare these two attributions across all four
+masking modes" → multiple `active_attribute_book` calls plus
+`compare_printer_fingerprints`). A fixed pipeline either does too
+much work on easy questions or too little on hard ones.
+
+Second, **natural language as the user interface.** A bibliographer
+asking "what books did Macock print between 1655 and 1660 that
+share clusters with Cole?" can get an answer without learning a
+domain-specific query language or memorizing tool signatures. The
+agent translates the question into the right tool calls.
+
+The tradeoff: the agent occasionally calls the wrong tool, supplies
+slightly off arguments, or invents references. The verifier catches
+the most egregious fabrications; the calibration injection prevents
+overconfident wrong answers; the trace is always available for
+auditing.
+
 | Setting | Recall@3 |
 |---|---|
 | Standard leave-one-book-out | 63.4% |
 | Multi-book printers (subset of 191 books) | 67.0% |
-| Singleton-printer books (subset of 11 books — the cold-start test) | **0.0%** |
+| Singleton-printer books (subset of 11 books - the cold-start test) | **0.0%** |
 | Active acquisition, open mode | 99.4% |
 | Active acquisition, clandestine | 93.8% |
 | Active acquisition, strict-clandestine | 93.8% |
@@ -339,7 +548,7 @@ Once the web interface or chat REPL is running, try:
 
 For the cold-start scenario:
 
-- *Who printed ESTC R28199?* — this is a book whose printer has only
+- *Who printed ESTC R28199?* -- this is a book whose printer has only
   one example in the corpus. The system should warn and decline to
   rank confidently.
 
