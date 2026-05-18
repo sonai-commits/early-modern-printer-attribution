@@ -1,11 +1,5 @@
 """probe_books_per_printer.py — find CDT printers with many distinct books.
 
-Why this matters: our previous expansion picked printers with many GLYPHS
-but didn't check whether those glyphs came from many BOOKS or just a few.
-Printers with 100 glyphs concentrated in 2 books cause structural leakage
-in leave-one-book-out evaluation: removing one book still leaves the
-other book defining nearly the same fingerprint.
-
 This probe:
   1. Hits the same /?printer_like= endpoint as probe_cdt_v6.py.
   2. Extracts the BOOK ID from each glyph's unique_id (e.g. 'R1691' from
