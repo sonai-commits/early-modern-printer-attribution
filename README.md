@@ -1,134 +1,201 @@
 # cdt-printer-attribution
 
-**An agentic RAG framework for damaged-sort printer attribution on the
-CMU Catalog of Distinctive Type, with rigorous diagnostics for
-distinguishing house-style anchoring from genuine cross-shop damaged-sort
-identification.**
+A system for identifying who printed an anonymous Early Modern English
+book, by analyzing the tiny physical damage marks on the printed letters.
+
+Built around a natural-language agent that can use thirteen specialized
+analysis tools, weigh bibliographic evidence against visual evidence,
+and explain its reasoning step by step.
 
 ---
 
-## What this is
+## The problem
 
-A research-grade Python pipeline that takes an anonymously printed
-Early Modern English book and tries to identify which printer actually
-produced it, by:
+Many books printed in seventeenth-century England carry false or missing
+information on their title pages. Printers who handled politically risky
+material—unlicensed pamphlets, dissenting religious texts, satirical
+attacks on the crown—often left their names off, used a fake imprint,
+or hid behind a bookseller. Identifying the real printer of an anonymous
+book is a classic problem in bibliography.
 
-1. Extracting damaged-character glyph signatures from images,
-2. Comparing them against a per-printer fingerprint built from the CDT
-   corpus,
-3. Combining the visual evidence with bibliographic context (imprint,
-   date, bookseller partners) via Bayesian likelihood-ratio aggregation,
-4. Adaptively choosing which evidence streams to gather via expected
-   information gain (active acquisition), and
-5. Wrapping all of the above in an LLM-driven agent that can be queried
-   in natural language.
+One useful clue: every printing shop owned a finite set of metal type
+pieces, and over time those individual pieces accumulated small physical
+nicks and bends. Two books printed with the same set of damaged pieces
+were almost certainly printed in the same shop. The
+[Catalog of Distinctive Type (CDT)](https://cdt.library.cmu.edu) at
+Carnegie Mellon catalogs thousands of these damaged characters across
+hundreds of identified printers, providing a reference set to compare
+against.
 
-It runs end-to-end on a single GPU machine and exposes both a CLI and a
-Gradio web interface.
+This project turns that reference set into an interactive attribution
+system.
 
-## What this is NOT
+## What this system does
 
-This README puts the limitations near the top deliberately, because the
-diagnostic findings are part of the contribution.
+Given an Early Modern book in the CDT corpus:
 
-1. **Not a clandestine attribution solver.** When we evaluate on books
-   whose catalogued printer has only one example in the corpus
-   ("cold-start" books, n=11), our recall@3 drops to **0.0%**. The
-   framework's apparent 67-88% recall on multi-book printers comes
-   substantially from house-style anchoring — same-printer cluster
-   neighbours in the cluster space — rather than from independent
-   damaged-sort identification. We document this finding rigorously.
+1. It extracts visual signatures from the damaged characters in the book.
+2. It compares those signatures against per-printer fingerprints built
+   from the rest of the corpus.
+3. It combines this visual evidence with other clues—the date, the
+   stated publisher, known bookseller partnerships—using probabilistic
+   reasoning.
+4. It can adaptively decide which clues to gather first, stopping early
+   when an answer becomes clear.
+5. The whole pipeline is wrapped in a language-model agent that you
+   can talk to in natural English and that explains every step of its
+   reasoning.
 
-2. **Not a general-purpose printer ID system.** Scope is 59 printers
-   and ~3,800 glyphs from the well-represented subset of CDT
-   (~1645–1704 English print). Other corpora are not supported without
-   custom data ingestion.
+The system runs on a single GPU machine and offers both a command-line
+interface and a web-based chat interface.
 
-3. **Not a head-to-head improvement over Vogler et al. 2023's CAML
-   model.** Their evaluation uses synthetic-trained models on hand-
-   curated real test pairs (Areopagitica, Leviathan Ornaments) with
-   constructed hard-negative pools. Ours uses leave-one-book-out on
-   CDT with structural same-printer leakage. The two numbers are not
-   directly comparable.
+## Important limitations
 
-4. **Not production-deployed.** The active-acquisition and Bayesian
-   aggregation pieces are research-grade demonstrations, not optimised
-   for serving traffic.
+These are documented up front because they shape what the system can
+actually do for a user.
 
-## Contributions, honestly stated
+**The system can rank known printers; it cannot identify unknown ones.**
+On books whose true printer has multiple examples in our corpus, the
+correct printer appears in the top 3 ranked candidates about 67% of the
+time. On books whose true printer has only one example in the corpus
+(an unknown printer in practice), the correct printer appears in the
+top 3 zero percent of the time across the 11 such books we tested.
 
-What the framework does contribute:
+The system detects this situation automatically and warns the user
+rather than offering a confident wrong answer. But the underlying point
+remains: this is a tool for narrowing down a list of plausible printers,
+not for discovering an unknown one.
 
-- **An agentic RAG architecture with 13 specialised tools** for
-  bibliographic and typographic analysis, calibrated confidence
-  injection, and a two-stage verifier that catches fabricated entity
-  references and unsupported tool claims.
-- **A Bayesian multi-evidence integration module** that combines vision,
-  imprint, temporal, and bookseller streams via log-likelihood-ratio
-  aggregation into a single calibrated posterior over candidate printers.
-- **An active evidence acquisition module** that adaptively selects
-  which evidence stream to run next based on expected information gain
-  per unit cost, with four masking modes (open / clandestine /
-  strict-clandestine / strictest-clandestine) for principled honest
-  evaluation.
-- **A printer-holdout and singleton-stratification diagnostic protocol**
-  that surfaces house-style anchoring vs damaged-sort identification.
-  This is the central scientific result: standard hold-out protocols
-  in this domain may overstate true attribution accuracy by tens of
-  percentage points, and we provide the tools to measure that gap.
-- **A cold-start guardrail** that detects when a book's catalogued
-  printer has no other corpus examples and refuses to confidently
-  attribute, instead reporting the structural limit honestly.
+**Corpus scope is limited.** The current evaluation covers 59 printers
+and around 3,800 character images from CDT, focused on English print
+between roughly 1645 and 1704. Books outside this period or geography
+are not supported without rebuilding the corpus.
 
-## Empirical results
+**This is not a production deployment.** The system is intended to
+support bibliographic research and to demonstrate an integrated
+agentic-RAG architecture. It has not been optimized for high traffic
+or hardened against adversarial input.
 
-Numbers below are from leave-one-book-out evaluation on 202 books
-across 59 printers (chance@3 = 5.5%), using a contrastive CNN encoder
-(embedding dim 128) trained on all 3,816 glyphs for 100 epochs.
+## How it works
 
-| Regime                                                       | Recall@3 |
-|--------------------------------------------------------------|----------|
-| Standard (overall, with leakage-flagged books excluded)      | **63.4%** |
-| Multi-book-printer subset                                    | 67.0%    |
-| **Singleton-printer subset (the honest cold-start test)**    | **0.0%** |
-| Active acquisition, open mode (publisher visible)            | 99.4%    |
-| Active acquisition, clandestine (printer name masked)        | 93.8%    |
-| Active acquisition, strict-clandestine (+ bookseller masked) | 93.8%    |
-| Active acquisition, strictest-clandestine (+ year suppressed)| 89.3%    |
+### The pipeline, in five layers
 
-The headline finding is the singleton-subset 0.0%. Across 11 books from
-11 distinct printers, none of which the encoder has other examples of,
-the catalogued printer ranks in the top 3 *zero times*. Printer-holdout
-cosine analysis confirms: when a printer's other books are removed from
-the cluster space, the top-match cosine drops from 0.76 to 0.54 —
-barely above what random pairs of glyphs produce.
+**Layer 1: Image preprocessing.** Each character image is normalized,
+background-removed, and rendered as a damage residual against a clean
+template of the same letter.
 
-Conclusion: this framework rank-recognises known printers but cannot
-discover unknown ones. For bibliographers using this kind of tool, the
-right use case is hypothesis refinement among a candidate set of known
-printers — not blind discovery.
+**Layer 2: Embedding.** A contrastive convolutional neural network,
+trained on the corpus, maps each damaged character to a 128-dimensional
+vector. Characters from the same physical type piece end up close
+together in this space.
+
+**Layer 3: Clustering.** Characters are grouped into clusters of likely
+same-piece matches. The current corpus produces 165 clusters with
+about 28% noise (characters that don't fit any cluster).
+
+**Layer 4: Fingerprints.** Each printer gets a TF-IDF-style fingerprint
+over the cluster space, capturing which damage patterns appear in their
+books and how distinctively.
+
+**Layer 5: Multi-evidence aggregation.** Visual evidence is combined
+with three other streams—imprint regex matching, temporal range
+overlap, and bookseller partnership likelihood—via Bayesian
+likelihood-ratio aggregation into a single posterior probability over
+candidate printers.
+
+### The agent
+
+On top of the pipeline sits a Qwen 2.5:14B language model with access
+to thirteen tools:
+
+| Tool | Purpose |
+|---|---|
+| `attribute_book` | Standard vision-only attribution with leave-one-book-out |
+| `attribute_book_multi_evidence` | Bayesian aggregation across all four evidence streams |
+| `active_attribute_book` | Adaptive stream selection, stops early when confident |
+| `compare_printer_fingerprints` | Find typographically similar printers |
+| `audit_cluster` | Inspect whether a cluster represents genuine shared damage |
+| `find_books_by_printer` | List a printer's catalogued books |
+| `search_imprints` | Regex search across publisher fields |
+| `lookup_estc` | Fetch the catalog record for a given ESTC identifier |
+| `find_similar_glyphs` | k-nearest-neighbor search in glyph embedding space |
+| `search_literature` | Semantic search over indexed bibliographic literature |
+| `list_printers` | Roster of corpus contents |
+| `get_glyph_metadata` | Inspect a specific damaged character |
+| `get_empirical_baselines` | Report the encoder's evaluation numbers |
+
+The agent decides which tools to call, in what order, with what
+arguments. A two-stage verifier reviews the agent's final answer and
+catches fabricated references or unsupported claims. Confidence levels
+are computed deterministically in Python and supplied to the agent as
+non-negotiable inputs—the agent cannot inflate its own confidence.
+
+### The active acquisition module
+
+Running all four evidence streams costs computational time. When the
+imprint clearly names a printer, vision analysis is unnecessary. The
+active acquisition module models this explicitly: at each step, it
+estimates which unused evidence stream would yield the most information
+about the printer, runs that stream, and stops once posterior
+probability exceeds a threshold (0.80 by default).
+
+The module supports four masking modes for principled evaluation:
+
+- **Open**: full imprint visible. Routine attribution case.
+- **Clandestine**: the true printer's name is masked from the publisher
+  field. Simulates a false imprint where the named printer is wrong.
+- **Strict-clandestine**: also masks the printer's known bookseller
+  partners. Closer to a real anonymous attribution case.
+- **Strictest-clandestine**: additionally suppresses the year. Only
+  visual evidence carries signal. The worst case.
+
+## Evaluation results
+
+Numbers are recall@3 on 202 books across 59 printers, with chance
+performance at 5.5%. The encoder is the contrastive CNN trained for
+100 epochs on the full corpus.
+
+| Setting | Recall@3 |
+|---|---|
+| Standard leave-one-book-out | 63.4% |
+| Multi-book printers (subset of 191 books) | 67.0% |
+| Singleton-printer books (subset of 11 books — the cold-start test) | **0.0%** |
+| Active acquisition, open mode | 99.4% |
+| Active acquisition, clandestine | 93.8% |
+| Active acquisition, strict-clandestine | 93.8% |
+| Active acquisition, strictest-clandestine | 89.3% |
+
+The active acquisition numbers benefit from same-printer cluster
+neighbors remaining in the candidate space. A separate diagnostic
+called printer-holdout measures how much of the visual similarity is
+attributable to those neighbors versus genuine cross-shop damage
+matching. The result: when a printer's other books are fully removed
+from the candidate space, top-match cosine similarity drops from 0.76
+to 0.54. This explains the singleton-subset zero recall.
+
+In plain terms: the visual encoder learned to recognize a printer's
+overall typographic character rather than the individual damaged
+pieces. Useful for ranking known printers, not for identifying unknown
+ones. The repository includes the printer-holdout diagnostic and the
+singleton-stratification protocol that produce these numbers, so they
+can be applied to other corpora and methods.
 
 ## Repository contents
 
 ```
 cdt-printer-attribution/
-├── real_rag.py                  Main pipeline & agent (~4400 lines)
-├── web_chat.py                  Gradio web demo (chat-style interface)
+├── real_rag.py                  Main pipeline and agent
+├── web_chat.py                  Gradio web demo
 │
-├── scraper.py                   CDT scraping library (pure functions)
-├── build_corpus.py              Single-entry-point corpus builder
-├── probe_cdt_v6.py              CDT inventory discovery (glyphs/printer)
-├── probe_books_per_printer.py   Distinct-books-per-printer probe
+├── scraper.py                   CDT scraping library
+├── build_corpus.py              Corpus builder CLI
+├── probe_cdt_v6.py              Inventory probe (glyphs per printer)
+├── probe_books_per_printer.py   Inventory probe (books per printer)
 │
-├── diagnose_active.py           Diagnostic: why does active eval fail?
-├── diagnose_strict.py           Diagnostic: where does strict recall come from?
+├── diagnose_active.py           Active-acquisition diagnostic
+├── diagnose_strict.py           Strict-mode evaluation diagnostic
 │
-├── history_rag.py               Legacy: original DINOv2 baseline pipeline,
-│                                kept for the DINOv2-vs-contrastive
-│                                ablation in the writeup. Superseded
-│                                operationally by real_rag.py.
-│
-├── results/                     Saved evaluation JSONs (recall, ablations)
+├── results/                     Evaluation result JSONs
 ├── traces/                      Sample agent reasoning traces
 │
 ├── README.md                    This file
@@ -136,98 +203,107 @@ cdt-printer-attribution/
 └── .gitignore
 ```
 
-CDT image data and meta files are **not redistributed** in this repo.
-They belong to Carnegie Mellon's CDT project. Run `build_corpus.py` to
-rebuild the corpus locally (see Setup below). Trained encoder weights
-are also regenerable from the scraped data via `--retrain`.
+The corpus itself (character images and metadata) is not redistributed
+here. It belongs to Carnegie Mellon's CDT project. Run `build_corpus.py`
+to rebuild it locally from the CDT API. Trained encoder weights are
+likewise regenerable.
 
 ## Setup
 
 ### Requirements
 
-- Python 3.11+ (tested on 3.13)
-- CUDA-capable GPU (for encoder training and Qwen inference)
-- ~16 GB GPU memory for Qwen 2.5:14b (smaller models work with edits)
-- ~10 GB disk space (corpus + cached embeddings + Ollama model)
+- Python 3.11 or newer
+- A CUDA-capable GPU with at least 16 GB of memory (for Qwen 14B
+  inference; smaller language models can be substituted with edits)
+- Around 10 GB of disk space for the corpus, encoder weights, and
+  Ollama model
 
-### Install Python dependencies
+### Step 1: Clone and install Python dependencies
 
 ```bash
-git clone https://github.com/<you>/cdt-printer-attribution.git
+git clone https://github.com/<your-username>/cdt-printer-attribution.git
 cd cdt-printer-attribution
 pip install -r requirements.txt
 ```
 
-### Install Ollama and pull Qwen
+### Step 2: Install Ollama and pull the language model
 
 ```bash
 curl -fsSL https://ollama.ai/install.sh | sh
 ollama pull qwen2.5:14b
 ```
 
-Make sure `ollama serve` is running. The agent connects to
-`localhost:11434` by default.
+Ensure the Ollama service is running. The agent connects to
+`http://localhost:11434` by default.
 
-### Build the corpus
+### Step 3: Build the corpus
 
-This downloads CDT images and metadata for the 39+20 = 59 printers we
-evaluated. ~45 minutes of polite-rate scraping. The build is staged
-so you can stop after any stage if disk space or time is limited.
+This downloads character images and metadata from the CDT API. The
+full build covers 59 printers in three stages and takes roughly 45
+minutes at the default polite rate limit.
 
 ```bash
-# Build everything in one command (recommended):
 python build_corpus.py --stage all
-
-# Or run stages individually:
-python build_corpus.py --stage base       # 19 well-represented printers
-python build_corpus.py --stage multibook  # +20 multi-book printers
-python build_corpus.py --stage singletons # +20 singleton-book printers
-                                          # (cold-start diagnostic)
 ```
 
-The builder is idempotent — interrupted runs resume from where they
-left off. Adjust scraping speed with `--rate-limit` (default 0.4s
-between requests).
+To run stages individually:
 
-### Train the contrastive encoder
+```bash
+python build_corpus.py --stage base        # 19 well-represented printers
+python build_corpus.py --stage multibook   # 20 additional multi-book printers
+python build_corpus.py --stage singletons  # 20 single-book printers
+```
+
+The builder is idempotent. Interrupted runs resume from where they
+stopped. Add `--rate-limit 1.0` to be more conservative with API calls.
+
+### Step 4: Train the encoder
 
 ```bash
 python real_rag.py --encoder contrastive --retrain
 ```
 
-100 epochs of contrastive metric learning on the scraped glyphs. ~5–10
-minutes on a recent GPU.
+100 epochs of contrastive metric learning. Takes 5 to 10 minutes on a
+recent GPU.
 
 ## Usage
 
-### CLI: standard evaluation
+### Command-line evaluation
 
 ```bash
-# Standard leave-one-book-out recall@3, stratified by singleton vs
-# multi-book printers
+# Standard recall@3 evaluation with singleton stratification
 python real_rag.py --encoder contrastive --evaluate
 
-# Diagnostic: printer-holdout cosine analysis
+# Printer-holdout diagnostic
 python real_rag.py --encoder contrastive --printer-holdout
 
-# Module A: multi-evidence Bayesian attribution
+# Multi-evidence Bayesian attribution evaluation
 python real_rag.py --encoder contrastive --multi-eval
 
-# Module B: active evidence acquisition (open mode)
+# Active acquisition evaluation (open mode)
 python real_rag.py --encoder contrastive --active-eval
 
-# Full active report (all 4 masking modes) — the key publishable result
+# Full active acquisition report across all four masking modes
 python real_rag.py --encoder contrastive --active-report
 ```
 
-### CLI: interactive agent
+### Interactive command-line chat
 
 ```bash
 python real_rag.py --encoder contrastive --chat
 ```
 
-Multi-turn REPL with conversation memory. Slash commands: `/help /reset
-/history /trace /save /baselines /quit`.
+The agent maintains conversation context across turns. Slash commands:
+
+| Command | Action |
+|---|---|
+| `/help` | Show available commands |
+| `/reset` | Clear conversation history |
+| `/history` | Print conversation so far |
+| `/trace` | Print tool calls from the last turn |
+| `/save <filename>` | Save the conversation to a file |
+| `/baselines` | Show empirical baselines |
+| `/quit` | Exit |
 
 ### Web interface
 
@@ -236,110 +312,109 @@ pip install "gradio>=4.0"
 python web_chat.py
 ```
 
-Open `http://127.0.0.1:7860`. The interface ships with 21 suggested
-questions covering every tool and every masking mode.
+Open `http://127.0.0.1:7860` in a browser. The interface includes 21
+example questions covering every tool and every masking mode.
 
-To expose the demo publicly via Gradio's tunneling service, edit
-`web_chat.py` and set `share=True` in the `demo.launch()` call. A
-`https://*.gradio.live` URL prints to the console; valid for 72 hours.
+To make the demo accessible publicly via Gradio's tunneling service,
+edit `web_chat.py` and set `share=True` in the `demo.launch()` call.
+A `https://*.gradio.live` URL appears in the console, valid for 72
+hours.
 
-## How the agent thinks
+## Example questions
 
-The agent (Qwen 2.5:14b via Ollama) has access to 13 tools:
+Once the web interface or chat REPL is running, try:
 
-| Tool                            | What it does                                       |
-|---------------------------------|----------------------------------------------------|
-| `attribute_book`                | Vision-only attribution, held-out evaluation       |
-| `attribute_book_multi_evidence` | Bayesian aggregation across 4 evidence streams     |
-| `active_attribute_book`         | Adaptive stream selection via expected info gain   |
-| `compare_printer_fingerprints`  | Cross-printer cluster overlap                       |
-| `audit_cluster`                 | Inspect cluster composition for shared-sort genuineness |
-| `find_books_by_printer`         | List a printer's catalogued books                  |
-| `search_imprints`               | Regex search over publisher fields                 |
-| `lookup_estc`                   | Get the metadata record for an ESTC ID             |
-| `find_similar_glyphs`           | k-NN over the glyph embedding space (LanceDB)      |
-| `search_literature`             | Semantic search over 11 indexed bibliographical works |
-| `list_printers`                 | Roster the corpus contents                         |
-| `get_glyph_metadata`            | Lookup a specific damaged glyph by ID              |
-| `get_empirical_baselines`       | Report the encoder's standard recall@3 baseline   |
+- *Who printed ESTC R175810?*
+- *Attribute ESTC R12254 and audit the top contributing cluster.*
+- *Use multi-evidence Bayesian attribution on ESTC R175810. Which
+  stream contributed most to the ranking?*
+- *Run active attribution on ESTC R175810 with strict_clandestine=true
+  (mask the printer's name and known booksellers). Compare against
+  open mode.*
+- *What are the three printers most typographically similar to
+  roberts_robert?*
+- *Audit cluster A::0006 and tell me whether it represents genuine
+  shared damage or single-printer variation.*
 
-The agent decides at each step which to invoke, executes, reads the
-result, and either calls another tool or produces a final answer.
-A two-stage verifier checks the final answer for fabricated entity
-references and unsupported tool claims, with a retry cap of 2 to
-prevent infinite re-asking.
+For the cold-start guardrail:
 
-Confidence bands are computed deterministically in Python from cosine
-similarity and gap-to-second, and **injected as fact the agent cannot
-override**. The cold-start warning flag is similarly authoritative.
+- *Who printed ESTC R28199?* — this is a book whose printer has only
+  one example in the corpus. The system should warn and decline to
+  rank confidently.
 
-## Honest caveats for users
+## Practical guidance for users
 
-If you are a working bibliographer thinking of using this for real
-attribution work:
+If you are using this tool to investigate a real attribution question,
+a few suggestions:
 
-1. The system **rank-recognises printers it has seen multiple examples
-   of**. If your target book's printer has 4+ books represented in CDT
-   and our corpus, you'll get a useful ranking and an honest confidence
-   band.
+1. **Check whether the target printer has multiple examples in the
+   corpus before trusting a ranking.** Use `find_books_by_printer` to
+   look at the candidate's other books. A printer represented by four
+   or more books in the corpus produces meaningful rankings; a printer
+   with one or zero books does not.
 
-2. The system **fails on genuinely unknown printers**. If you suspect
-   the printer is someone CDT has only one (or zero) examples of, the
-   ranking is meaningless. The cold-start guardrail will tell you this.
+2. **A leakage_suspect flag at cosine ≥ 0.90 means "there is almost
+   certainly a same-printer match in the corpus."** Treat this as
+   strong evidence the system found a same-printer book, not as
+   independent confirmation that the damaged pieces match.
 
-3. The leakage_suspect flag fires at cosine ≥ 0.90 and indicates that
-   other books by the printer probably remained in cluster space.
-   Treat as a "very strong same-printer match exists" signal, not as
-   independent damaged-sort confirmation.
+3. **In active acquisition mode, the cost savings figure tells you
+   something about the question's difficulty.** Open-mode attributions
+   that save 40%+ of compute are easy cases where the imprint
+   essentially gave the answer. Strict-clandestine attributions that
+   save 0% are running every available stream because none was decisive
+   on its own.
 
-4. The active acquisition module's cost-savings claim (45% saved in
-   open mode) is real but applies when bibliographic imprint context
-   is reliable. In strict-clandestine mode the cost-saving drops to
-   ~0% because no early-stopping evidence is decisive.
-
-5. We have NOT compared head-to-head against Print & Probability
-   (Vogler et al. 2023, AAAI). Their evaluation protocol uses
-   synthetic-trained models on different test data. Going to their
-   protocol would require a separate effort.
+4. **The agent's confidence band is computed in Python, not by the
+   language model.** When you see "high confidence," that means the
+   underlying cosine similarity gap exceeded a threshold. The agent
+   cannot inflate it.
 
 ## Related work
 
 - **Print & Probability / CAML** (Vogler, Allen et al., AAAI 2023):
-  "Contrastive Attention Networks for Attribution of Early Modern
-  Print." Pairwise glyph matching trained on synthetic damage
-  augmentation. Recall@5 = 58.15% on Leviathan Ornaments hard-negative
-  pool. https://arxiv.org/abs/2306.07998
-- **Areopagitica attribution** (Warren et al. 2020): manual
-  bibliographical attribution methodology.
-- **Leviathan Ornaments** (Warren et al. 2021): definitive Richardson
-  attribution; used as ground truth in CAML evaluation.
-- **LEAD** (Nov 2025): LLM-enhanced author-name disambiguation hybrid;
-  closest analogue to our Module A in a different problem domain.
+  *Contrastive Attention Networks for Attribution of Early Modern
+  Print*. Pairwise damaged-glyph matching trained on synthetic damage
+  augmentation, evaluated on hand-curated test pairs from Areopagitica
+  and Leviathan Ornaments. Reports Recall@5 of 58.15% on the Leviathan
+  hard-negative pool. [arxiv.org/abs/2306.07998](https://arxiv.org/abs/2306.07998)
+- **Areopagitica attribution** (Warren et al. 2020): the manual
+  bibliographic study that established the methodology for damaged-
+  type attribution as currently practiced.
+- **Leviathan Ornaments** (Warren et al. 2021): the bibliographic
+  resolution of the famously misattributed Hobbes editions, used as
+  ground truth in subsequent computational work.
+
+Our system differs in two respects. We operate at the printer level
+(ranking 59 candidate printers) rather than the pairwise-match level
+(deciding whether two specific glyphs are the same physical piece).
+And we combine visual evidence with bibliographic evidence in an
+agentic, tool-driven workflow rather than as a fixed pipeline.
 
 ## Acknowledgments
 
-This work uses the **Catalog of Distinctive Type** from Carnegie Mellon
-University Libraries. All glyph images and metadata are CDT's; we
-gratefully use their open API. The encoder, fingerprint pipeline,
-agent, and diagnostics are this project's contribution.
+This work uses the
+[Catalog of Distinctive Type](https://cdt.library.cmu.edu)
+from Carnegie Mellon University Libraries. All character images and
+catalog metadata are CDT's, accessed through their open API. The
+encoder, fingerprint pipeline, agent design, evaluation diagnostics,
+and chat interface are this project's contribution.
 
 ## Citation
-
-If this work or its diagnostic protocols are useful to you:
 
 ```bibtex
 @misc{cdt-printer-attribution,
   author = {Debanjan},
-  title  = {cdt-printer-attribution: An agentic RAG framework for
-            damaged-sort attribution with cold-start diagnostics},
+  title  = {cdt-printer-attribution: An agentic system for damaged-type
+            printer attribution on the CMU Catalog of Distinctive Type},
   year   = {2026},
-  url    = {https://github.com/<you>/cdt-printer-attribution}
+  url    = {https://github.com/<your-username>/cdt-printer-attribution}
 }
 ```
 
 ## License
 
-Code released under the MIT License. CDT data and derived artifacts
-(glyph images, encoder weights) are subject to Carnegie Mellon's terms
-for the Catalog of Distinctive Type; please consult CDT directly for
-redistribution.
+Code is released under the MIT License. Character images, catalog
+metadata, and any artifacts derived from CDT data (including trained
+encoder weights) are subject to Carnegie Mellon's terms for the
+Catalog of Distinctive Type; consult CDT directly for redistribution.
